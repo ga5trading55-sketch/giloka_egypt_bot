@@ -44,8 +44,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def list_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.chat_id
-    response = supabase.table("custom_replies").select("keyword, reply_text").eq("user_id", user_id).execute()
+    owner_id = update.message.chat_id
+    response = supabase.table("custom_replies").select("keyword, reply_text").eq("owner_id", owner_id).execute()
     
     if not response.data:
         await update.message.reply_text("لا توجد لديك أسئلة أو ردود مسجلة حالياً.")
@@ -62,7 +62,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     raw_text = update.message.text.strip()
-    user_id = update.message.chat_id
+    owner_id = update.message.chat_id
 
     # 1. إضافة أو تعديل رد (اضف: الكلمة = الرد)
     if raw_text.startswith("اضف:") or raw_text.startswith("أضف:"):
@@ -77,12 +77,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             data = {
-                "user_id": user_id,
+                "owner_id": owner_id,
                 "keyword": keyword,
                 "reply_text": reply_text
             }
-            # يتم الحفظ أو التحديث التلقائي للرد إن كان موجوداً من قبل
-            supabase.table("custom_replies").upsert(data, on_conflict="user_id, keyword").execute()
+            # يتم الحفظ والتحديث بالتوافق مع owner_id
+            supabase.table("custom_replies").upsert(data, on_conflict="owner_id, keyword").execute()
             await update.message.reply_text(f"✅ تم حفظ / تغيير الرد بنجاح!\n\n🔹 الكلمة: `{keyword}`\n💬 الرد: {reply_text}", parse_mode="Markdown")
             return
         else:
@@ -93,13 +93,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if raw_text.startswith("حذف:"):
         keyword = raw_text.split(":", 1)[1].strip().lower()
         if keyword:
-            supabase.table("custom_replies").delete().eq("user_id", user_id).eq("keyword", keyword).execute()
+            supabase.table("custom_replies").delete().eq("owner_id", owner_id).eq("keyword", keyword).execute()
             await update.message.reply_text(f"🗑️ تم حذف السؤال/الكلمة `{keyword}` والرد الخاص بها بنجاح.", parse_mode="Markdown")
             return
 
     # 3. الرد التلقائي عند كتابة الكلمة المفتاحية
     text_lower = raw_text.lower()
-    response = supabase.table("custom_replies").select("reply_text").eq("user_id", user_id).eq("keyword", text_lower).execute()
+    response = supabase.table("custom_replies").select("reply_text").eq("owner_id", owner_id).eq("keyword", text_lower).execute()
     
     if response.data:
         reply = response.data[0]["reply_text"]
