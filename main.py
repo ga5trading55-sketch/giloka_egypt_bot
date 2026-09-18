@@ -45,6 +45,71 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def list_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = update.message.chat_id
+    try:
+        response = supabase.table("custom_replies").select("keyword, reply_text").eq("owner_id", owner_id).execute()
+        
+        if not response.data:
+            await update.message.reply_text("لا توجد لديك أسئلة أو ردود مسجلة حالياً.")
+            return
+
+        text = "📋 **قائمة الأسئلةهذا هو كود ملف `main.py` كاملاً ومعدلاً بعد إضافة منطق جلب المعرف العددي للذكاء الاصطناعي بدلاً من المعرف النصي `@bot`:
+
+```python
+import os
+import re
+import logging
+from flask import Flask
+from threading import Thread
+from supabase import create_client, Client
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+
+# إعداد التسجيل للمساعدة في تتبع الأخطاء
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+
+# --- إعداد خادم Flask لإبقاء الخدمة تعمل على Render ---
+server = Flask('')
+
+@server.route('/')
+def home():
+    return "Bot is Live and Running!"
+
+def run():
+    port = int(os.environ.get("PORT", 8080))
+    server.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.daemon = True
+    t.start()
+
+# --- إعداد بيانات المتغيرات ---
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# متغير عام لتخزين معرف البوت الخاص بك لتجنب تكرار الطلبات
+MY_BOT_ID = None
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        "أهلاً بك! 👋\n\n"
+        "يمكنك إدارة الأسئلة والردود التلقائية الخاصة بك بسهولة في أي وقت:\n\n"
+        "➕ **لإضافة أو تغيير رد:**\n"
+        "`اضف: الكلمة = الرد الجديد`\n"
+        "*(مثال: `اضف: السعر = سعر التوصيل 5000 دينار`)*\n\n"
+        "📋 **لنعرض لك كل كلماتك والردود:**\n"
+        "/list\n\n"
+        "❌ **لحذف سؤال ورد معين:**\n"
+        "`حذف: الكلمة`\n"
+        "*(مثال: `حذف: السعر`)*"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def list_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    owner_id = update.message.chat_id
     response = supabase.table("custom_replies").select("keyword, reply_text").eq("owner_id", owner_id).execute()
     
     if not response.data:
@@ -58,10 +123,34 @@ async def list_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
+    global MY_BOT_ID
+    if not update.message:
         return
+
+    # 0. جلب المعرف العددي للبوت (مرة واحدة فقط) لتفادي استخدام اليوزرنيم النصي
+    if MY_BOT_ID is None:
+        bot_info = await context.bot.get_me()
+        MY_BOT_ID = bot_info.id
+
+    # التعامل مع الرسائل الموجهة للبوت من البوتات الأخرى (مثل الذكاء الاصطناعي)
+    sender_id = update.message.from_user.id if update.message.from_user else None
     
-    raw_text = update.message.text.strip()
+    # التأكد من أن الرسالة موجهة إلى هذا البوت حصراً وليست صادرة منه
+    is_reply_to_me = (
+        update.message.reply_to_message and 
+        update.message.reply_to_message.from_user and 
+        update.message.reply_to_message.from_user.id == MY_BOT_ID
+    )
+
+    if not is_reply_to_me and sender_id == MY_BOT_ID:
+        return
+
+    # استخراج النص سواء كان رسالة عادية أو تعليق مصاحب لملف/صورة
+    raw_text = update.message.text or update.message.caption
+    if not raw_text:
+        return
+
+    raw_text = raw_text.strip()
     owner_id = update.message.chat_id
 
     # 1. إضافة أو تعديل رد (اضف: الكلمة = الرد)
@@ -81,7 +170,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "keyword": keyword,
                 "reply_text": reply_text
             }
-            # يتم الحفظ والتحديث بالتوافق مع owner_id
             supabase.table("custom_replies").upsert(data, on_conflict="owner_id, keyword").execute()
             await update.message.reply_text(f"✅ تم حفظ / تغيير الرد بنجاح!\n\n🔹 الكلمة: `{keyword}`\n💬 الرد: {reply_text}", parse_mode="Markdown")
             return
@@ -97,18 +185,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"🗑️ تم حذف السؤال/الكلمة `{keyword}` والرد الخاص بها بنجاح.", parse_mode="Markdown")
             return
 
-    # 3. الرد التلقائي عند كتابة الكلمة المفتاحية
-    text_lower = raw_text.lower()
-    response = supabase.table("custom_replies").select("reply_text").eq("owner_id", owner_id).eq("keyword", text_lower).execute()
+    # 3. الرد التلقائي عند مطابقة الكلمة المفتاحية
+    text_clean = raw_text.lower()
+    
+    response = supabase.table("custom_replies").select("keyword, reply_text").eq("owner_id", owner_id).execute()
     
     if response.data:
-        reply = response.data[0]["reply_text"]
-        await update.message.reply_text(reply)
+        for item in response.data:
+            kw = item["keyword"].lower()
+            # استخدام الحدود اللفظية (Word Boundaries) لضمان مطابقة الكلمة بدقة
+            pattern = r'(^|[^\w\u0600-\u06FF])' + re.escape(kw) + r'($|[^\w\u0600-\u06FF])'
+            if re.search(pattern, text_clean):
+                await update.message.reply_text(item["reply_text"])
+                break
 
 if __name__ == "__main__":
     keep_alive()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("list", list_replies))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.run_polling()
