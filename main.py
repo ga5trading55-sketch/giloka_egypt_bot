@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+from datetime import datetime, timezone
 from flask import Flask
 from threading import Thread
 from supabase import create_client, Client
@@ -75,7 +76,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_text = raw_text.strip()
     owner_id = update.message.chat_id
 
-    # 1. إضافة أو تعديل رد
+    # --- 1. فحص الاشتراك وتاريخ الانتهاء ---
+    try:
+        sub_response = supabase.table("subscribers").select("expires_at").eq("owner_id", owner_id).execute()
+        
+        # إذا لم يكن المستخدم مضافاً في جدول المشتركين
+        if not sub_response.data:
+            await update.message.reply_text("❌ عذراً، أنت غير مشترك في الخدمة. يرجى التواصل مع الإدارة للتفعيل.")
+            return
+
+        # التحقق من أن الاشتراك لم ينتهِ بعد
+        expires_at_str = sub_response.data[0]["expires_at"]
+        expires_at = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+        now = datetime.now(timezone.utc)
+
+        if now > expires_at:
+            await update.message.reply_text("⚠️ انتهت فترة اشتراكك في الخدمة. يرجى تجديد الاشتراك للاستمرار.")
+            return
+
+    except Exception as e:
+        print(f"Error checking subscription: {e}")
+        await update.message.reply_text("❌ حدث خطأ أثناء التحقق من اشتراكك.")
+        return
+
+    # --- 2. إضافة أو تعديل رد ---
     if raw_text.startswith("اضف:") or raw_text.startswith("أضف:"):
         content = raw_text.split(":", 1)[1]
         if "=" in content:
@@ -102,7 +126,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ اكتب الأمر بهذا الشكل:\n`اضف: الكلمة = الرد`", parse_mode="Markdown")
             return
 
-    # 2. حذف رد
+    # --- 3. حذف رد ---
     if raw_text.startswith("حذف:"):
         keyword = raw_text.split(":", 1)[1].strip().lower()
         if keyword:
@@ -113,7 +137,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ خطأ أثناء الحذف:\n`{str(e)}`", parse_mode="Markdown")
             return
 
-    # 3. الرد التلقائي عند مطابقة الكلمة
+    # --- 4. الرد التلقائي عند مطابقة الكلمة ---
     text_clean = raw_text.lower()
     try:
         response = supabase.table("custom_replies").select("keyword, reply_text").eq("owner_id", owner_id).execute()
@@ -133,4 +157,4 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("list", list_replies))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
