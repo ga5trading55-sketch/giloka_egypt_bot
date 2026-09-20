@@ -1,7 +1,7 @@
 import os
 import re
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from flask import Flask
 from threading import Thread
 from supabase import create_client, Client
@@ -31,6 +31,9 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
+# ضع هنا معرف حسابك الرئيسي كـ أدمن للتحكم بالإشتراكات
+ADMIN_ID = 1957078158  
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -44,9 +47,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/list\n\n"
         "❌ **لحذف سؤال ورد معين:**\n"
         "`حذف: الكلمة`\n"
-        "*(مثال: `حذف: السعر`)*"
+        "*(مثال: `حذف: السعر`)*\n\n"
+        "🆔 **لمعرفة الآيدي الخاص بك:** /id"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.chat_id
+    await update.message.reply_text(f"🆔 الـ ID الخاص بك هو:\n`{user_id}`", parse_mode="Markdown")
 
 async def list_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     owner_id = update.message.chat_id
@@ -64,6 +72,63 @@ async def list_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ في جلب القائمة:\n`{str(e)}`", parse_mode="Markdown")
+
+# --- أوامر الأدمن لإدارة المشتركين ---
+
+async def add_subscriber_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.chat_id
+    if user_id != ADMIN_ID:
+        return
+
+    try:
+        # /add USER_ID DAYS NAME
+        args = context.args
+        if len(args) < 2:
+            await update.message.reply_text("⚠️ طريقة الاستخدام الصحيحة:\n`/add [USER_ID] [DAYS] [NAME]`\n\nمثال:\n`/add 8913199795 30 علي`", parse_mode="Markdown")
+            return
+
+        sub_id = int(args[0])
+        days = int(args[1])
+        sub_name = " ".join(args[2:]) if len(args) > 2 else "مشترك"
+
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+
+        data = {
+            "owner_id": sub_id,
+            "name": sub_name,
+            "expires_at": expires_at
+        }
+
+        supabase.table("subscribers").upsert(data, on_conflict="owner_id").execute()
+        await update.message.reply_text(
+            f"✅ **تمت إضافة/تمديد الاشتراك بنجاح!**\n\n"
+            f"👤 **الاسم:** {sub_name}\n"
+            f"🆔 **الآيدي:** `{sub_id}`\n"
+            f"📅 **المدة:** {days} يوم\n"
+            f"⏳ **ينتهي في:** `{expires_at[:10]}`",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطأ أثناء إضافة المشترك:\n`{str(e)}`", parse_mode="Markdown")
+
+async def delete_subscriber_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.chat_id
+    if user_id != ADMIN_ID:
+        return
+
+    try:
+        args = context.args
+        if not args:
+            await update.message.reply_text("⚠️ يرجى كتابة الآيدي المراد حذفه:\n`/sub_delete 8913199795`", parse_mode="Markdown")
+            return
+
+        sub_id = int(args[0])
+        supabase.table("subscribers").delete().eq("owner_id", sub_id).execute()
+        await update.message.reply_text(f"🗑️ تم إلغاء اشتراك المشترك صاحب الآيدي `{sub_id}` بنجاح.", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطأ أثناء الحذف:\n`{str(e)}`", parse_mode="Markdown")
+
+# --- معالجة الرسائل الرئيسية ---
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
@@ -154,7 +219,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == "__main__":
     keep_alive()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # الأوامر العامة
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("id", get_id))
     app.add_handler(CommandHandler("list", list_replies))
+    
+    # أوامر الأدمن
+    app.add_handler(CommandHandler("add", add_subscriber_cmd))
+    app.add_handler(CommandHandler("sub_delete", delete_subscriber_cmd))
+    
+    # معالجة الرسائل
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.run_polling(drop_pending_updates=True)
