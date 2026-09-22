@@ -109,17 +109,26 @@ async def add_sub_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         days = int(args[1])
         sub_name = " ".join(args[2:]) if len(args) > 2 else "مشترك جديد"
 
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+        exp_dt = datetime.now(timezone.utc) + timedelta(days=days)
+        expires_at = exp_dt.isoformat()
+        date_str = exp_dt.strftime("%Y-%m-%d")
 
         data = {
             "owner_id": sub_id,
-            "manager_id": sender_id,
+            "manager_id": sender_id if sender_id != ADMIN_ID else None,
             "name": sub_name,
             "expires_at": expires_at
         }
         supabase.table("subscribers").upsert(data, on_conflict="owner_id").execute()
         
-        await update.message.reply_text(f"✅ تم إضافة/تجديد المشترك `{sub_name}` (`{sub_id}`) بنجاح لمدة {days} يوم!", parse_mode="Markdown")
+        msg = (
+            f"✅ **تمت إضافة/تمديد الاشتراك بنجاح!**\n\n"
+            f"👤 **الاسم:** {sub_name}\n"
+            f"🆔 **الآيدي:** `{sub_id}`\n"
+            f"📅 **المدة:** {days} يوم\n"
+            f"⏳ **ينتهي في:** {date_str}"
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"❌ حدث خطأ أثناء الإضافة:\n`{str(e)}`", parse_mode="Markdown")
 
@@ -214,7 +223,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender_id = update.message.chat_id
     user = update.message.from_user
 
-    # أ) إضافة رد تلقائي (لالمشترك)
+    # أ) إضافة رد تلقائي (للمشترك)
     if raw_text.startswith("اضف:") or raw_text.startswith("أضف:"):
         content = raw_text.split(":", 1)[1]
         if "=" in content:
